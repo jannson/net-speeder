@@ -20,7 +20,7 @@
 
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet);
 void print_usage(void);
-
+bpf_u_int32 g_net;
 
 /*
  * print help text
@@ -35,13 +35,20 @@ void print_usage(void) {
 }
 
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet) {
-	static int count = 1;                  
-	struct libnet_ipv4_hdr *ip;              
+	static int count = 1;
+	struct libnet_ipv4_hdr *ip;
+    uint32_t u32 = 0;
 
 	libnet_t *libnet_handler = (libnet_t *)args;
 	count++;
-	
+
 	ip = (struct libnet_ipv4_hdr*)(packet + ETHERNET_H_LEN);
+
+    u32 = (uint32_t)ip->ip_dst.s_addr;
+    if (ip->ip_p == 0x11 && u32 == g_net) {
+        //udp and udp send to myself, ignore it
+        return;
+    }
 
 	if(ip->ip_ttl != SPECIAL_TTL) {
 		ip->ip_ttl = SPECIAL_TTL;
@@ -75,6 +82,8 @@ int main(int argc, char **argv) {
 	char *filter_rule = NULL;
 	struct bpf_program fp;
 	bpf_u_int32 net, mask;
+    pcap_if_t *devList;
+    pcap_if_t *pdev;
 
 	if (argc == ARGC_NUM) {
 		dev = argv[1];
@@ -82,10 +91,10 @@ int main(int argc, char **argv) {
 		printf("Device: %s\n", dev);
 		printf("Filter rule: %s\n", filter_rule);
 	} else {
-		print_usage();	
+		print_usage();
 		return -1;
 	}
-	
+
 	printf("ethernet header len:[%d](14:normal, 16:cooked)\n", ETHERNET_H_LEN);
 
 	if (pcap_lookupnet(dev, &net, &mask, errbuf) == -1) {
@@ -94,7 +103,33 @@ int main(int argc, char **argv) {
 		mask = 0;
 	}
 
-	printf("init pcap\n");
+/* get the devices list */
+if (pcap_findalldevs(&devList, errbuf) == -1)
+{
+    fprintf(stderr, "There is a problem with pcap_findalldevs: %s\n", errbuf);
+    return -1;
+}
+
+/* scan the list for a suitable device to capture from */
+for (pdev = devList; pdev != NULL; pdev = pdev->next)
+{
+
+    pcap_addr_t *dev_addr; //interface address that used by pcap_findalldevs()
+
+    /* check if the device captureble*/
+    for (dev_addr = pdev->addresses; dev_addr != NULL; dev_addr = dev_addr->next) {
+        if (dev_addr->addr->sa_family == AF_INET && dev_addr->addr && dev_addr->netmask && (0 == strcmp(pdev->name, dev))) {
+            //printf("Found a device %s on address 0x%02x with netmask 0x%2x\n", pdev->name, ((struct sockaddr_in *)dev_addr->addr)->sin_addr.s_addr, ((struct sockaddr_in *)dev_addr->netmask)->sin_addr.s_addr);
+            g_net = (uint32_t)(((struct sockaddr_in *)dev_addr->addr)->sin_addr.s_addr);
+            break;
+        }
+    }
+}
+
+found:
+
+	printf("init pcap net=0x%x\n", g_net);
+
 	handle = pcap_open_live(dev, SNAP_LEN, 1, 1000, errbuf);
 	if(handle == NULL) {
 		printf("pcap_open_live dev:[%s] err:[%s]\n", dev, errbuf);
