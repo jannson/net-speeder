@@ -1,4 +1,4 @@
 #!/bin/sh
 
-nohup ./net_speeder > net.log 2>&1 &
+nohup ./net_speeder eth0 "udp" > net.log 2>&1 &
 
